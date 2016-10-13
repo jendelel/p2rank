@@ -1,0 +1,1 @@
+gradle --daemon --offline clean assemble
