@@ -3,7 +3,11 @@ package cz.siret.prank.domain
 import com.google.common.base.CharMatcher
 import com.google.common.base.Splitter
 import cz.siret.prank.domain.loaders.ConcavityLoader
-import cz.siret.prank.domain.loaders.FPockeLoader
+import cz.siret.prank.domain.loaders.DeepSiteLoader
+import cz.siret.prank.domain.loaders.FPocketLoader
+import cz.siret.prank.domain.loaders.LiseLoader
+import cz.siret.prank.domain.loaders.MetaPocket2Loader
+import cz.siret.prank.domain.loaders.P2RankLoader
 import cz.siret.prank.domain.loaders.PredictionLoader
 import cz.siret.prank.domain.loaders.SiteHoundLoader
 import cz.siret.prank.features.api.ProcessedItemContext
@@ -13,9 +17,10 @@ import cz.siret.prank.program.params.Parametrized
 import cz.siret.prank.utils.Futils
 import cz.siret.prank.utils.StrUtils
 import groovy.util.logging.Slf4j
-import groovyx.gpars.GParsPool
 
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Dataset represents a list of items (usually proteins) to be processed by the program.
@@ -84,7 +89,7 @@ class Dataset implements Parametrized {
 
         // for one column datasets
         Protein getProtein() {
-            getPredictionPair().liganatedProtein
+            getPredictionPair().queryProtein
         }
 
         PredictionPair loadPredictionPair() {
@@ -187,7 +192,7 @@ class Dataset implements Parametrized {
         items.each {
             if (it.cachedPair!=null) {
                 it.cachedPair.prediction.protein.clearSecondaryData()
-                it.cachedPair.liganatedProtein.clearSecondaryData()
+                it.cachedPair.queryProtein.clearSecondaryData()
             }
         }
     }
@@ -239,14 +244,27 @@ class Dataset implements Parametrized {
             int nt = ThreadPoolFactory.pool.poolSize
             log.info "processing dataset [$name] using $nt threads"
 
-            AtomicInteger counter = new AtomicInteger(1);
+//            AtomicInteger counter = new AtomicInteger(1);
+//            GParsPool.withExistingPool(ThreadPoolFactory.pool) {
+//                items.eachParallel { Item item ->
+//                    int num = counter.getAndAdd(1)
+//                    processItem(item, num, processor, result)
+//                }
+//            }
 
-            GParsPool.withExistingPool(ThreadPoolFactory.pool) {
-                items.eachParallel { Item item ->
-                    int num = counter.getAndAdd(1)
-                    processItem(item, num, processor, result)
-                }
+            ExecutorService executor = Executors.newFixedThreadPool(params.threads)
+            List<Callable> tasks = new ArrayList<>()
+            items.eachWithIndex { Item item, int idx ->
+                int num = idx + 1
+                tasks.add(new Callable() {
+                    @Override
+                    Object call() throws Exception {
+                        processItem(item, num, processor, result)
+                    }
+                })
             }
+            executor.invokeAll(tasks)
+            executor.shutdownNow();
 
         } else {
             log.info "processing dataset [$name] using 1 thread"
@@ -294,7 +312,7 @@ class Dataset implements Parametrized {
         PredictionLoader res
         switch (method) {
             case "fpocket":
-                res = new FPockeLoader()
+                res = new FPocketLoader()
                 break
             case "concavity":
                 res = new ConcavityLoader()
@@ -302,8 +320,20 @@ class Dataset implements Parametrized {
             case "sitehound":
                 res = new SiteHoundLoader()
                 break
+            case "lise":
+                res = new LiseLoader()
+                break
+            case "deepsite":
+                res = new DeepSiteLoader()
+                break
+            case "metapocket2":
+                res = new MetaPocket2Loader()
+                break
+            case "p2rank":
+                res = new P2RankLoader()
+                break
             default:
-                res = new FPockeLoader() // TODO: throw exception here, should not be run on prank predict
+                res = new FPocketLoader() // TODO: throw exception here, should not be run on prank predict
                 //throw new Exception("Unknown prediction method defined in dataset: $method")
         }
 
@@ -479,6 +509,25 @@ class Dataset implements Parametrized {
 
     static List<String> parseHeader(String line) {
         SPLITTER.splitToList(line).tail()
+    }
+
+
+    static Dataset createJoined(List<Dataset> datasets) {
+        assert datasets!=null && !datasets.empty
+        
+        if (datasets.size()==1) {
+            return datasets[0]
+        }
+
+        String name = (datasets*.name).join('+')
+        Dataset res = new Dataset(name, '--joined--')
+        res.header = datasets[0].header
+
+        for (Dataset d : datasets) {
+            res.items.addAll(d.items)
+        }
+
+        return res
     }
 
 }

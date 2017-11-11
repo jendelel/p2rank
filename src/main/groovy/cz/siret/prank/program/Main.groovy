@@ -10,6 +10,7 @@ import groovy.util.logging.Slf4j
 import org.apache.commons.lang3.StringUtils
 
 import static cz.siret.prank.utils.ATimer.startTimer
+import static cz.siret.prank.utils.Futils.mkdirs
 import static cz.siret.prank.utils.Futils.writeFile
 
 @Slf4j
@@ -149,12 +150,12 @@ class Main implements Parametrized, Writable {
             }
         }
 
-        Futils.mkdirs(outdir)
+        mkdirs(outdir)
         return outdir
     }
 
     Dataset loadDataset() {
-        Dataset.loadFromFile(findDataset(args.unnamedArgs[0])) // by default dataset is the first unnamed argument adter command
+        Dataset.loadFromFile(findDataset(args.unnamedArgs[0])) // by default dataset is the first unnamed argument after command
     }
 
     Dataset loadDatasetOrFile() {
@@ -339,7 +340,6 @@ class Main implements Parametrized, Writable {
         }
     }
 
-
 //===========================================================================================================//
 
     Main(CmdLineArgs args) {
@@ -353,7 +353,6 @@ class Main implements Parametrized, Writable {
     static String getVersionName() {
         return "P2RANK $version"
     }
-
 
     static void main(String[] args) {
         ATimer timer = startTimer()

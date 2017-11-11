@@ -12,6 +12,7 @@ import org.apache.logging.log4j.core.config.AppenderRef
 import org.apache.logging.log4j.core.config.Configuration
 import org.apache.logging.log4j.core.config.LoggerConfig
 import org.apache.logging.log4j.core.layout.PatternLayout
+import org.slf4j.bridge.SLF4JBridgeHandler
 
 /**
  *
@@ -26,7 +27,6 @@ class LogManager implements Writable {
 
     boolean loggingToFile = false
     String logFile
-
 
     Appender fileAppender
     Configuration config
@@ -54,16 +54,23 @@ class LogManager implements Writable {
             loggingToFile = true
         }
         if (!logToConsole) {
-            config.getAppender(CONSOLE_APPENDER_NAME).stop()
-            loggerConfig.removeAppender(CONSOLE_APPENDER_NAME)
-            config.rootLogger.removeAppender(CONSOLE_APPENDER_NAME)
-
-            if (!logToFile) {
-                config.removeLogger(loggerName)
-            }
+//            config.getAppender(CONSOLE_APPENDER_NAME).stop()
+//            loggerConfig.removeAppender(CONSOLE_APPENDER_NAME)
+//            config.rootLogger.removeAppender(CONSOLE_APPENDER_NAME)
+//
+//            if (!logToFile) {
+//                config.removeLogger(loggerName)
+//            }
+            loggerConfig.setLevel(Level.ERROR)  // always log at least errors to console
         }
 
         ctx.updateLoggers();
+
+        // netlib uses java.util.logging - bridge to slf4
+        // compare https://github.com/fommil/netlib-java/blob/master/perf/logging.properties
+        // note: this seems to disable all netlib logging
+        SLF4JBridgeHandler.removeHandlersForRootLogger()
+        SLF4JBridgeHandler.install()
 
         //loggerConfig.getAppenders().each { System.out.println "APPENDER: " + it.value.name }
     }

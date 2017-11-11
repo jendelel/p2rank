@@ -5,14 +5,17 @@ import cz.siret.prank.features.implementation.AsaFeature
 import cz.siret.prank.features.implementation.AsaResiduesFeature
 import cz.siret.prank.features.implementation.BfactorFeature
 import cz.siret.prank.features.implementation.ContactResiduesPositionFeature
+import cz.siret.prank.features.implementation.ProteinMassFeature
 import cz.siret.prank.features.implementation.ProtrusionFeature
 import cz.siret.prank.features.implementation.ProtrusionHistogramFeature
+import cz.siret.prank.features.implementation.PyramidFeature
 import cz.siret.prank.features.implementation.SurfaceProtrusionFeature
 import cz.siret.prank.features.implementation.XyzDummyFeature
 import cz.siret.prank.features.implementation.chem.ChemFeature
 import cz.siret.prank.features.implementation.conservation.ConservationFeature
 import cz.siret.prank.features.implementation.conservation.ConservationCloudFeature
 import cz.siret.prank.features.implementation.conservation.ConservationCloudScaledFeature
+import cz.siret.prank.features.implementation.histogram.PairHistogramFeature
 import cz.siret.prank.features.implementation.volsite.VolsiteFeature
 import cz.siret.prank.program.PrankException
 import groovy.transform.CompileStatic
@@ -58,6 +61,9 @@ class FeatureRegistry {
         registerFeature(new Asa2Feature())
         registerFeature(new AsaResiduesFeature())
         registerFeature(new XyzDummyFeature())
+        registerFeature(new PairHistogramFeature())
+        registerFeature(new PyramidFeature())
+        registerFeature(new ProteinMassFeature())
 
         // Register new feature implementations here
 

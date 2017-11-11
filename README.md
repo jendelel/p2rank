@@ -1,26 +1,28 @@
 
-P2RANK 
+P2Rank 
 ======
-Ligand-binding site prediction tool based on machine learning.
+Ligand-binding site prediction based on machine learning.
 
 <p align="center">
     <img src="http://siret.ms.mff.cuni.cz/krivak/p2rank/figures/points2_small.png" width="600">
 </p>
 
+[![version 2.0_pre.1](https://img.shields.io/badge/version-2.0_pre.1-green.svg)](/build.gradle)
 [![Build Status](https://travis-ci.org/rdk/p2rank.svg?branch=master)](https://travis-ci.org/rdk/p2rank)
+[![License: MIT](http://img.shields.io/badge/license-MIT-blue.svg?style=flat)](/LICENSE.txt)
 
 ### Description
 
-P2RANK is a standalone command line program that predicts ligand-binding pockets from a protein structure. It achieves high prediction success rates without relying on an external software for computation of complex features or on a database of known protein-ligand templates. 
+P2Rank is a standalone command line program that predicts ligand-binding pockets from a protein structure. It achieves high prediction success rates without relying on an external software for computation of complex features or on a database of known protein-ligand templates. 
 
 ### Requirements
 
-* Java 1.8 or newer for execution
-* PyMOL 1.7.x for viewing visualizations
+* JRE 8 (Java 1.8) 
+* PyMOL 1.7.x for viewing visualizations (optional)
 
 ### Setup
 
-P2RANK requires no installation. Binary packages can be downloaded from the project website.
+P2Rank requires no installation. Binary packages can be downloaded from the project website.
 
 * **Download**: http://siret.ms.mff.cuni.cz/p2rank
 * Source code: https://github.com/rdk/p2rank
@@ -36,19 +38,19 @@ See more usage examples below...
 
 ### Compilation
 
-To compile P2RANK you need Gradle (https://gradle.org/). Build with `./make.sh` or `gradle assemble`.
+To compile P2Rank you need Gradle (https://gradle.org/). Build with `./make.sh` or `gradle assemble`.
 
 ### Algorithm
 
-P2RANK makes predictions by scoring and clustering points on the protein's solvent accessible surface. Ligandability score of individual points is determined by a machine learning based model trained on the dataset of known protein-ligand complexes. For more details see slides and publications.
+P2Rank makes predictions by scoring and clustering points on the protein's solvent accessible surface. Ligandability score of individual points is determined by a machine learning based model trained on the dataset of known protein-ligand complexes. For more details see slides and publications.
 
 Slides: http://bit.ly/p2rank_slides 
 
 ### Publications
 
-If you use P2RANK, please cite the following papers:
+If you use P2Rank, please cite the following papers:
 
-* [Conference paper](http://bit.ly/p2rank_conference_paper) inroducing P2RANK prediction algorithm
+* [Conference paper](http://bit.ly/p2rank_conference_paper) inroducing P2Rank prediction algorithm
 * [Research article](http://bit.ly/prank_paper) in JChem about PRANK rescoring algorithm
 
 Usage Examples
@@ -62,7 +64,7 @@ Following commands can be executed in the installation directory.
 prank help
 ~~~
 
-### Predict ligand binding sites (P2RANK algorithm)
+### Predict ligand binding sites (P2Rank algorithm)
 
 ~~~
 prank predict test.ds                             # run on whole dataset (containing list of pdb files)
@@ -90,7 +92,7 @@ prank eval-predict test.ds
    `<pdb_file_name>_predictions.csv`, which contains an ordered list of predicted pockets, their scores, coordinates 
    of their centroids and list of PDBSerials of adjacent amino acids and solvent exposed atoms.
 
-   If coordinates of Connolly points that belong to predicted pockets are needed they can be found
+   If coordinates of SAS points that belong to predicted pockets are needed they can be found
    in `visualizations/data/<pdb_file_name>_points.pdb`. There "Residue sequence number" (23-26) of HETATM record 
    corresponds to the rank of corresponding pocket (points with value 0 do not belong to any pocket).
 
@@ -113,7 +115,9 @@ prank predict -c example.groovy -seed 151 -threads 8  test.ds
 
 ### Rescoring (PRANK algorithm)
 
-In addition to predicting new ligand binding sites, P2RANK is also able to rescore pockets predicted by other methods (Fpocket and ConCavity are supported at the moment).
+In addition to predicting new ligand binding sites, 
+P2Rank is also able to rescore pockets predicted by other methods 
+(Fpocket, ConCavity, SiteHound, MetaPocket2, LISE and DeepSite are supported at the moment).
 
 ~~~
 prank rescore test_data/fpocket.ds
@@ -131,7 +135,7 @@ prank eval-rescore fpocket-pairs.ds
 
 [Fpocket](http://fpocket.sourceforge.net/) is widely used open source ligand binding site prediction program.
 It is fast, easy to use and well documented. As such, it was a great inspiration for this project.
-Fpocket is written in C and it is based on a very different algorithm.
+Fpocket is written in C and it is based on a different geometric algorithm.
 
 Some practical differences:
 
@@ -141,16 +145,16 @@ Some practical differences:
     - produces a high number of less relevant pockets (and since the default scoring function isn't very effective the most relevant pockets often doesn't get to the top)
     - contains MDpocket algorithm for pocket predictions from molecular trajectories 
     - still better documented
-* P2RANK 
+* P2Rank 
     - achieves significantly better identification success rates when considering top-ranked pockets
     - produces smaller number of more relevant pockets
     - speed:
         + slower when running on a single protein (due to JVM startup cost)
         + approximately as fast on average running on a big dataset on a single core
         + due to parallel implementation potentially much faster on multi core machines
-    - higher memory footprint (~750m but doesn't grow much with more parallel threads)
+    - higher memory footprint (~1G but doesn't grow much with more parallel threads)
 
-Both Fpocket and P2RANK have many configurable parameters that influence behaviour of the algorithm and can be tweaked to achieve better results for particular requirements.
+Both Fpocket and P2Rank have many configurable parameters that influence behaviour of the algorithm and can be tweaked to achieve better results for particular requirements.
 
 
 ## Thanks

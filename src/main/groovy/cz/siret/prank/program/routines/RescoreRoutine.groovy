@@ -2,7 +2,9 @@ package cz.siret.prank.program.routines
 
 import cz.siret.prank.domain.Dataset
 import cz.siret.prank.domain.Prediction
+import cz.siret.prank.domain.PredictionPair
 import cz.siret.prank.features.FeatureExtractor
+import cz.siret.prank.program.PrankException
 import cz.siret.prank.score.PocketRescorer
 import cz.siret.prank.score.WekaSumRescorer
 import cz.siret.prank.score.results.RescoringSummary
@@ -12,6 +14,8 @@ import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import weka.classifiers.Classifier
 
+import static cz.siret.prank.domain.Dataset.COLUMN_PREDICTION
+import static cz.siret.prank.domain.Dataset.COLUMN_PROTEIN
 import static cz.siret.prank.utils.ATimer.startTimer
 import static cz.siret.prank.utils.Futils.mkdirs
 import static cz.siret.prank.utils.Futils.writeFile
@@ -39,6 +43,11 @@ class RescoreRoutine extends Routine {
         writeParams(outdir)
 
         write "rescoring pockets on proteins from dataset [$dataset.name]"
+
+        if (!(dataset.header.contains(COLUMN_PROTEIN) && dataset.header.contains(COLUMN_PREDICTION))) {
+            throw new PrankException("Dataset must contain '${COLUMN_PROTEIN}' and '${COLUMN_PREDICTION}' columns!")
+        }
+
         log.info "outdir: $outdir"
 
         Classifier classifier = WekaUtils.loadClassifier(modelf)
@@ -48,10 +57,11 @@ class RescoreRoutine extends Routine {
 
         Dataset.Result result = dataset.processItems(params.parallel, new Dataset.Processor() {
             void processItem(Dataset.Item item) {
-                Prediction prediction = item.prediction
+                PredictionPair pair = item.predictionPair
+                Prediction prediction = pair.prediction
 
                 PocketRescorer rescorer = new  WekaSumRescorer(classifier, extractor)
-                rescorer.reorderPockets(prediction, item.getContext())
+                rescorer.reorderPockets(prediction, item.context)
 
                 RescoringSummary rsum = new RescoringSummary(prediction)
                 writeFile "$outdir/${item.label}_rescored.csv", rsum.toCSV()

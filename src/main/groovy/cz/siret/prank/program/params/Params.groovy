@@ -83,12 +83,48 @@ class Params {
 
     double protrusion_radius = 10
 
+//===========================================================================================================//
+
+
     /**
      * Number of bins for protr_hist feature, must be >=2
      */
     int protr_hist_bins = 5
 
     boolean protr_hist_cumulative = false
+
+    boolean protr_hist_relative = false
+
+//===========================================================================================================//
+
+    /**
+     * Number of bins for Atom Pair distance histogram (pair_hist) feature, must be >=2
+     */
+    int pair_hist_bins = 5
+
+    /**
+     * Radius capturing atoms considered in pair_hist feature
+     */
+    double pair_hist_radius = 6
+
+    /**
+     * smooth vs. sharp binning
+     */
+    boolean pair_hist_smooth = false
+
+    boolean pair_hist_normalize = false
+
+    /**
+     * if false only protein exposed atmos are considered
+     */
+    boolean pair_hist_deep = true
+
+    /**
+     * size of random subsample of atom pairs, 0 = all
+     */
+    int pair_hist_subsample_limit = 0
+
+//===========================================================================================================//
 
     /**
      * conservation parameteres
@@ -106,12 +142,20 @@ class Params {
      * Conservation file with this pattern is loaded:
      * baseName + chainId + "." + origin + ".hom.gz"
      */
-    String conservation_origin = "hssp";
+    String conservation_origin = "hssp"
 
     /**
      * Log scores for binding and nonbinding scores to file
      */
-    String log_scores_to_file = "";
+    String log_scores_to_file = ""
+
+    /**
+     * limits how many pocket SAS points are used for scoring (after sorting), 0=unlimited
+     */
+    int score_point_limit = 0
+
+//===========================================================================================================//
+
 
     //== CLASSIFIERS ===================
 
@@ -150,19 +194,25 @@ class Params {
     int rf_threads = 0
 
     /**
-     * size ot the bag: 1..100%
+     * size of a bag: 1..100% of the dataset
      */
     int rf_bagsize = 100
 
     /**
      * cutoff for joining ligand atom groups into one ligand
      */
-    double ligand_clustering_distance = 1.7 // covalent bond length
+    double ligand_clustering_distance = 1.7 // ~ covalent bond length
 
     /**
      * cutoff around ligand that defines positives
      */
     double positive_point_ligand_distance = 2.5
+
+    /**
+     * distance around ligand atoms that define ligand induced volume
+     * (for evaluation by some criteria, DSO, ligand coverage...)
+     */
+    double ligand_induced_volume_cutoff = 2.5
 
     /**
      * points between [positive_point_ligand_distance,neutral_point_margin] will be left out form training
@@ -204,12 +254,12 @@ class Params {
     double solvent_radius = 1.6
 
     /**
-     * Connolly point tessellation (~density) used in pradiction step
+     * SAS tessellation (~density) used in pradiction step
      */
     int tessellation = 2
 
     /**
-     * Connolly point tessellation (~density) used in training step
+     * SAS tessellation (~density) used in training step
      */
     int train_tessellation = 2
 
@@ -250,6 +300,12 @@ class Params {
     double avg_pow = 1
 
     /**
+     * regarding feature projection to SAS points: calculate weighted average
+     * (shoud be true by default, kept false for backward compatibility reasons)
+     */
+    boolean avg_weighted = false
+
+    /**
      * exponent of point ligandabitity score (before adding it to pocket score)
      */
     double point_score_pow = 2
@@ -267,6 +323,11 @@ class Params {
      * delete files containing training/evaluation feature vectors
      */
     boolean delete_vectors = true
+
+    /**
+     * collect vectors also from eval dataset (only makes sense if delete_vectors=false)
+     */
+    boolean collect_eval_vectors = false
 
     /**
      * number of random seed iterations
@@ -403,7 +464,7 @@ class Params {
     /**
      * clear secondary caches (protein surfaces etc.) between runs (when iterating params or seed)
      */
-    boolean clear_sec_caches = true
+    boolean clear_sec_caches = false
 
 
 
@@ -547,14 +608,31 @@ class Params {
     /**
      * number of inetarions
      */
-    int hopt_max_iterations = 100
+    int hopt_max_iterations = 1000
 
     /**
      * randomize seed before every training in experiments
      */
     boolean randomize_seed = false
 
-    List<String> selected_stats = ['DCA_4_0', 'DCA_4_2', 'AVG_POCKETS', 'AVG_POCKET_SAS_POINTS', 'LIGAND_COVERAGE']
+    List<String> selected_stats = ['DCA_4_0',
+                                   'DCA_4_2',
+                                   'DCA_4_4',
+                                   'DCC_5_0',
+                                   'DCC_5_2',
+                                   'DSOR_02_0',
+                                   'DSOR_02_2',
+                                   'DSWO_05_0',
+                                   'DSWO_05_2',
+                                   'MCC',
+                                   'TPX',
+                                   'LOGLOSS',
+                                   'AVG_DSO_SUCC',
+                                   'AVG_LIGCOV_SUCC',
+                                   'AVG_POCKETS',
+                                   'AVG_POCKET_SAS_POINTS',
+                                   'AVG_POCKET_SAS_POINTS_TRUE_POCKETS',
+                                   'TIME_MINUTES']
 
 //===========================================================================================================//
 
@@ -633,7 +711,11 @@ class Params {
                 }
             } else if (pv instanceof Boolean) {
                 if ("0"==value) value=false
+                if ("0.0"==value) value=false
+                if (0d==value) value=false
                 if ("1"==value) value=true
+                if ("1.0"==value) value=true
+                if (1d==value) value=true
                 me."$pname" = Boolean.valueOf( value )
             } else if (pv instanceof Integer) {
                 me."$pname" = new Double(""+value).intValue()

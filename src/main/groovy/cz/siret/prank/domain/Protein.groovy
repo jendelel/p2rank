@@ -71,7 +71,7 @@ class Protein implements Parametrized {
 
             exposedAtoms = getConnollySurface().computeExposedAtoms(proteinAtoms)
 
-            log.info "connolly surface points: $connollySurface.points.count"
+            log.info "SAS points: $connollySurface.points.count"
             log.info "exposed protein atoms: $exposedAtoms.count of $proteinAtoms.count"
         }
     }
@@ -109,7 +109,7 @@ class Protein implements Parametrized {
             boolean TRAIN_SURFACE_DIFFERENT = params.tessellation != params.train_tessellation
             if (TRAIN_SURFACE_DIFFERENT) {
                 trainSurface = Surface.computeConnollySurface(proteinAtoms, params.solvent_radius, params.train_tessellation)
-                log.info "train connolly surface points: $trainSurface.points.count"
+                log.info "train SAS points: $trainSurface.points.count"
             } else {
                 trainSurface = connollySurface
             }
@@ -126,8 +126,12 @@ class Protein implements Parametrized {
         trainSurface = null
         exposedAtoms = null
         secondaryData.clear()
+        ligands.each { it.sasPoints = null; it.predictedPocket = null }
     }
 
+    /**
+     * @return all atoms from relevant ligands
+     */
     Atoms getAllLigandAtoms() {
         Atoms res = new Atoms()
         for (lig in ligands) {

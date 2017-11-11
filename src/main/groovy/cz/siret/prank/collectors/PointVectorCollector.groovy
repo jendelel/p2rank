@@ -9,8 +9,9 @@ import cz.siret.prank.features.api.ProcessedItemContext
 import cz.siret.prank.geom.Atoms
 import cz.siret.prank.program.PrankException
 import cz.siret.prank.program.params.Parametrized
+import cz.siret.prank.program.routines.results.EvalContext
 import cz.siret.prank.score.criteria.IdentificationCriterium
-import cz.siret.prank.utils.ListUtils
+import cz.siret.prank.utils.CollectionUtils
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import org.biojava.nbio.structure.Atom
@@ -37,10 +38,10 @@ class PointVectorCollector extends VectorCollector implements Parametrized {
     Atoms getTrainingRelevantLigandAtoms(PredictionPair pair) {
         Atoms res = new Atoms()
 
-        if (params.positive_def_ligtypes.contains("relevant")) res.addAll( pair.liganatedProtein.ligands*.atoms )
-        if (params.positive_def_ligtypes.contains("ignored")) res.addAll( pair.liganatedProtein.ignoredLigands*.atoms )
-        if (params.positive_def_ligtypes.contains("small")) res.addAll( pair.liganatedProtein.smallLigands*.atoms )
-        if (params.positive_def_ligtypes.contains("distant")) res.addAll( pair.liganatedProtein.distantLigands*.atoms )
+        if (params.positive_def_ligtypes.contains("relevant")) res.addAll( pair.queryProtein.ligands*.atoms )
+        if (params.positive_def_ligtypes.contains("ignored")) res.addAll( pair.queryProtein.ignoredLigands*.atoms )
+        if (params.positive_def_ligtypes.contains("small")) res.addAll( pair.queryProtein.smallLigands*.atoms )
+        if (params.positive_def_ligtypes.contains("distant")) res.addAll( pair.queryProtein.distantLigands*.atoms )
 
         return res
     }
@@ -51,11 +52,11 @@ class PointVectorCollector extends VectorCollector implements Parametrized {
 
         FeatureExtractor proteinExtractorPrototype = extractorFactory.createPrototypeForProtein(pair.prediction.protein, context)
 
-        Atoms ligandAtoms = getTrainingRelevantLigandAtoms(pair) //pair.liganatedProtein.allLigandAtoms.withKdTreeConditional()
+        Atoms ligandAtoms = getTrainingRelevantLigandAtoms(pair) //pair.queryProtein.allLigandAtoms.withKdTreeConditional()
 
 
         if (ligandAtoms.empty) {
-            log.error "no ligands! [{}]", pair.liganatedProtein.name
+            log.error "no ligands! [{}]", pair.queryProtein.name
         }
 
         if (!params.sample_negatives_from_decoys) {
@@ -65,7 +66,7 @@ class PointVectorCollector extends VectorCollector implements Parametrized {
 
             List<Pocket> usePockets = pair.prediction.pockets  // use all pockets
             if (params.train_pockets>0) {
-                usePockets = [ *pair.getCorrectlyPredictedPockets(criterion) , *ListUtils.head(params.train_pockets, pair.getFalsePositivePockets(criterion)) ]
+                usePockets = [ *pair.getCorrectlyPredictedPockets(criterion) , *CollectionUtils.head(params.train_pockets, pair.getFalsePositivePockets(criterion)) ]
             }
 
             for (Pocket pocket in usePockets) {

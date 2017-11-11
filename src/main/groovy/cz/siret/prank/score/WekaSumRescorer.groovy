@@ -6,6 +6,7 @@ import cz.siret.prank.features.FeatureExtractor
 import cz.siret.prank.features.FeatureVector
 import cz.siret.prank.features.PrankFeatureExtractor
 import cz.siret.prank.features.api.ProcessedItemContext
+import cz.siret.prank.fforest.FasterForest
 import cz.siret.prank.program.params.Parametrized
 import cz.siret.prank.program.rendering.LabeledPoint
 import cz.siret.prank.score.metrics.ClassifierStats
@@ -24,8 +25,9 @@ import static cz.siret.prank.score.prediction.PointScoreCalculator.predictedPosi
 import static cz.siret.prank.score.prediction.PointScoreCalculator.predictedScore
 
 /**
- * Rescorer and Predictor
- * not thread safe
+ * rescorer and predictor
+ * 
+ * Not thread safe!
  *
  * This is the main rrescore used by P2RANK to make predictions based on machine learning
  */
@@ -44,7 +46,7 @@ class WekaSumRescorer extends PocketRescorer implements Parametrized  {
     boolean collectPoints = params.visualizations || params.predictions
     boolean visualizeAllSurface = params.vis_all_surface
 
-    // Connolly points with ligandability score for prediction and visualization
+    // SAS points with ligandability score for prediction and visualization
     List<LabeledPoint> labeledPoints = new ArrayList<>()
 
     // auxiliary for weka
@@ -116,10 +118,8 @@ class WekaSumRescorer extends PocketRescorer implements Parametrized  {
 
             // generate predictions
             if (params.predictions) {
-                prediction.reorderedPockets = new PocketPredictor().predictPockets(labeledPoints, prediction.protein)
-                if (prediction.pockets==null || prediction.pockets.empty) { // in case of one-column datasets without predictions
-                    prediction.pockets = prediction.reorderedPockets
-                }
+                prediction.pockets = new PocketPredictor().predictPockets(labeledPoints, prediction.protein)
+                prediction.reorderedPockets = prediction.pockets
                 prediction.labeledPoints = labeledPoints
             }
         }
@@ -174,8 +174,13 @@ class WekaSumRescorer extends PocketRescorer implements Parametrized  {
     }
 
     private final double[] getDistributionForPoint(Classifier classifier, FeatureVector vect) {
-        PerfUtils.arrayCopy(vect.array, alloc)
-        return classifier.distributionForInstance(auxInst)
+        if (classifier instanceof FasterForest) {
+            return ((FasterForest)classifier).distributionForAttributes(vect.array, 2)
+        } else {
+            PerfUtils.arrayCopy(vect.array, alloc)
+            return classifier.distributionForInstance(auxInst)
+        }
+
     }
 
     ClassifierStats getStats() {

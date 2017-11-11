@@ -10,7 +10,7 @@ import groovy.transform.CompileStatic
 @CompileStatic
 abstract class WeightFun implements Parametrized {
 
-    static enum Option { ONE, OLD, NEW, GAUSS, INV, INV2 }
+    static enum Option { ONE, OLD, NEW, GAUSS, INV, INV2, INVPOW, INVPOW2 }
 
     abstract double weight(double dist);
 
@@ -27,6 +27,8 @@ abstract class WeightFun implements Parametrized {
             case Option.GAUSS : return new Gauss()
             case Option.INV   : return new Inv()
             case Option.INV2  : return new Inv2()
+            case Option.INVPOW  : return new InvPow()
+            case Option.INVPOW2  : return new InvPow2()
         }
     }
 
@@ -53,6 +55,7 @@ abstract class WeightFun implements Parametrized {
     static class Old extends WeightFun {
         final double MIN_DIST = params.weight_dist_param
         double exp = params.weight_power
+
         double weight(double dist) {
             double weight
             if (dist <= MIN_DIST) {
@@ -68,6 +71,7 @@ abstract class WeightFun implements Parametrized {
     static class Gauss extends WeightFun {
         double mean = params.point_min_distfrom_protein
         double sigma = params.weight_sigma
+
         double weight(double dist) {
             return MathUtils.gaussNorm(dist-mean, sigma)
         }
@@ -75,16 +79,43 @@ abstract class WeightFun implements Parametrized {
 
     static class Inv extends WeightFun {
         double rmax = params.neighbourhood_radius
+
         double weight(double dist) {
             return 1 - dist/rmax
+        }
+    }
+
+    static class InvPow extends WeightFun {
+        double rmax = params.neighbourhood_radius
+        double exp = params.weight_power
+
+        double weight(double dist) {
+            double w = 1 - dist/rmax
+            w = Math.pow(w, exp)
+            return w
         }
     }
 
     static class Inv2 extends WeightFun {
         double rmin = params.solvent_radius
         double rmax = params.neighbourhood_radius
+
         double weight(double dist) {
             return (rmax-dist)/(rmax-rmin)
+        }
+    }
+
+    static class InvPow2 extends WeightFun {
+        double rmin = params.weight_dist_param 
+        double rmax = params.neighbourhood_radius
+        double exp = params.weight_power
+        
+        double weight(double dist) {
+            if (dist < rmin)
+                dist = rmin
+            double w = (rmax-dist)/(rmax-rmin)
+            w = Math.pow(w, exp)
+            return w
         }
     }
 

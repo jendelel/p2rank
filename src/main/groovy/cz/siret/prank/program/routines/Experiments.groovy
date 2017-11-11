@@ -4,18 +4,21 @@ import cz.siret.prank.domain.Dataset
 import cz.siret.prank.domain.DatasetCachedLoader
 import cz.siret.prank.program.Main
 import cz.siret.prank.program.params.ListParam
+import cz.siret.prank.program.params.Parametrized
 import cz.siret.prank.program.params.Params
-import cz.siret.prank.program.params.optimizer.HVariable
 import cz.siret.prank.program.routines.results.EvalResults
 import cz.siret.prank.utils.CmdLineArgs
 import cz.siret.prank.utils.Futils
-import groovy.transform.CompileDynamic
+import cz.siret.prank.utils.StrUtils
+import cz.siret.prank.utils.WekaUtils
 import groovy.util.logging.Slf4j
 
+import static cz.siret.prank.utils.Futils.safe
+import static cz.siret.prank.utils.Futils.writeFile
 import static cz.siret.prank.utils.ThreadUtils.async
 
 /**
- * ploop and traineval routines for oprimization experiments
+ * ploop, hopt and traineval routines for optimization experiments
  */
 @Slf4j
 class Experiments extends Routine {
@@ -26,8 +29,6 @@ class Experiments extends Routine {
     Dataset evalDataset
     boolean doCrossValidation = false
 
-    String trainSetFile
-    String evalSetFile
     String outdirRoot
     String datadirRoot
 
@@ -43,38 +44,54 @@ class Experiments extends Routine {
         if (command in ['traineval', 'ploop', 'hopt']) {
             prepareDatasets(main)
         }
-
-        main.configureLoggers(outdir)
     }
 
     void prepareDatasets(Main main) {
 
-        trainSetFile =  cmdLineArgs.get('train', 't')
-        trainSetFile = Main.findDataset(trainSetFile)
-        trainDataset = DatasetCachedLoader.loadDataset(trainSetFile)
+        String trainSetArg =  cmdLineArgs.get('train', 't')
+        trainDataset = prepareDataset(trainSetArg)
 
         // TODO: enable executing 'prank ploop crossval'
         // (now ploop with crossvalidation is possible only implicitly by not specifying eval dataset)
 
-        evalSetFile  =  cmdLineArgs.get('eval', 'e')
-        if (evalSetFile!=null) { // no eval dataset -> do crossvalidation
-            evalSetFile = Main.findDataset(evalSetFile)
-            evalDataset = DatasetCachedLoader.loadDataset(evalSetFile)
+        String evalSetArg  =  cmdLineArgs.get('eval', 'e')
+        if (evalSetArg!=null) { // no eval dataset -> do crossvalidation
+            evalDataset = prepareDataset(evalSetArg)
         } else {
             doCrossValidation = true
         }
 
         outdirRoot = params.output_base_dir
         datadirRoot = params.dataset_base_dir
-        label = command + "_" + trainDataset.label + "_" + (doCrossValidation ? "crossval" : evalDataset.label)
+        label = command + "_" + safe(trainDataset.label) + "_" + (doCrossValidation ? "crossval" : safe(evalDataset.label))
+
         outdir = main.findOutdir(label)
+        main.configureLoggers(outdir)
         main.writeCmdLineArgs(outdir)
         writeParams(outdir)
     }
 
+    Dataset prepareDataset(String datasetArg) {
+        assert datasetArg!=null
+        if (datasetArg.contains('+')) {
+            // joined dataset
+            List<Dataset> datasets = StrUtils.split(datasetArg, '+').collect { prepareSingleDataset(it) }.toList()
+            return Dataset.createJoined(datasets)
+        } else {
+            return prepareSingleDataset(datasetArg)
+        }
+    }
+    Dataset prepareSingleDataset(String datasetArg) {
+        String file = Main.findDataset(datasetArg)
+        return DatasetCachedLoader.loadDataset(file)
+    }
+
     void execute() {
         log.info "executing $command()"
+
         this."$command"()  // dynamic exec method
+
+        writeFile "$outdir/status.done", "done"
         log.info "results saved to directory [${Futils.absPath(outdir)}]"
     }
 
@@ -86,16 +103,17 @@ class Experiments extends Routine {
      */
     private static EvalResults doTrainEval(String outdir, Dataset trainData, Dataset evalData) {
 
-        TrainEvalRoutine iter = new TrainEvalRoutine(outdir)
-        iter.trainDataSet = trainData
-        iter.evalDataSet = evalData
+        TrainEvalRoutine iter = new TrainEvalRoutine(outdir, trainData, evalData)
+
         iter.collectTrainVectors()
-        //iter.collectEvalVectors() // for further inspection
+        if (Params.inst.collect_eval_vectors) {
+            iter.collectEvalVectors() // collect and save to disk for further inspection
+        }
 
         EvalRoutine trainRoutine = new EvalRoutine(outdir) {
             @Override
             EvalResults execute() {
-                iter.outdir = getEvalRoutineOutir() // is set to "../seed.xx" by SeedLoop
+                iter.outdir = getEvalRoutineOutdir() // is set to "../seed.xx" by SeedLoop
                 iter.trainAndEvalModel()
                 return iter.evalRoutine.results
             }
@@ -127,7 +145,7 @@ class Experiments extends Routine {
 
         String topOutdir = outdir
 
-        GridOprimizer go = new GridOprimizer(topOutdir, rparams)
+        GridOptimizer go = new GridOptimizer(topOutdir, rparams)
         go.init()
         go.runGridOptimization { String iterDir ->
             return runExperimentStep(iterDir, trainDataset, evalDataset, doCrossValidation)

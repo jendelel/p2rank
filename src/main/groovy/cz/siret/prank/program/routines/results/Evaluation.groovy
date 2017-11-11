@@ -6,12 +6,16 @@ import cz.siret.prank.domain.PredictionPair
 import cz.siret.prank.domain.Protein
 import cz.siret.prank.features.implementation.conservation.ConservationScore
 import cz.siret.prank.geom.Atoms
-import cz.siret.prank.program.params.Params
+import cz.siret.prank.program.params.Parametrized
 import cz.siret.prank.program.rendering.LabeledPoint
 import cz.siret.prank.score.criteria.*
+import cz.siret.prank.utils.Writable
 import groovy.util.logging.Slf4j
 import org.apache.commons.lang3.StringUtils
 
+import static cz.siret.prank.geom.Atoms.intersection
+import static cz.siret.prank.geom.Atoms.union
+import static cz.siret.prank.utils.CollectionUtils.head
 import static cz.siret.prank.utils.Formatter.*
 import static java.util.Collections.emptyList
 
@@ -23,10 +27,10 @@ import static java.util.Collections.emptyList
  * Threadsafe.
  */
 @Slf4j
-class Evaluation {
+class Evaluation implements Parametrized, Writable {
 
     /** cutoff distance in A around ligand atoms that determins which SAS points cover the ligand */
-    static final double LIG_SAS_CUTOFF = 2
+    final double LIG_SAS_CUTOFF = params.ligand_induced_volume_cutoff   // TODO consider separate value (e.g. 2)
 
     IdentificationCriterium standardCriterium = new DCA(4.0)
     List<IdentificationCriterium> criteria
@@ -48,6 +52,7 @@ class Evaluation {
     int ligSASPointsCount
     int ligSASPointsCoveredCount
 
+
     Evaluation(List<IdentificationCriterium> criteria) {
         this.criteria = criteria
     }
@@ -56,12 +61,7 @@ class Evaluation {
         this( getDefaultEvalCrtieria() )
     }
 
-    /**
-     * get list of evaluation criteria used during eval routines
-     */
-    static List<IdentificationCriterium> getDefaultEvalCrtieria() {
-        ((1..15).collect { new DCA(it) }) + ((1..10).collect { new DCC(it) }) + ((1..6).collect { new DPA(it) }) + ((1..6).collect { new DSA(it) })
-    }
+
 
     void sort() {
         proteinRows = proteinRows.sort { it.name }
@@ -98,51 +98,75 @@ class Evaluation {
                 .average().getAsDouble()
     }
 
+    private Pocket findPocketForLigand(Ligand ligand, List<Pocket> pockets,
+                                       IdentificationCriterium criterium, EvalContext context) {
+        for (Pocket pocket in pockets) {
+            if (criterium.isIdentified(ligand, pocket, context)) {
+                return pocket
+            }
+        }
+        return null
+    }
+
+    private void assignPocketsToLigands(List<Ligand> ligands, List<Pocket> pockets, EvalContext context) {
+        for (Ligand ligand : ligands) {
+            ligand.predictedPocket = findPocketForLigand(ligand, pockets, standardCriterium, context)
+        }
+    }
+
     void addPrediction(PredictionPair pair, List<Pocket> pockets) {
+        EvalContext context = new EvalContext()
+
+        pair.queryProtein.ligands.each { it.sasPoints = null } // clear sas points cache
+
+        assignPocketsToLigands(pair.queryProtein.ligands, pockets, context)
 
         List<LigRow> tmpLigRows = new ArrayList<>()
         List<PocketRow> tmpPockets = new ArrayList<>()
 
-        Protein lp = pair.liganatedProtein
+        Protein protein = pair.queryProtein
         Atoms sasPoints = pair.prediction.protein.connollySurface.points
         Atoms labeledPoints = new Atoms(pair.prediction.labeledPoints ?: emptyList())
         
         ProteinRow protRow = new ProteinRow()
         protRow.name = pair.name
-        protRow.atoms = lp.allAtoms.count
-        protRow.protAtoms = lp.proteinAtoms.count
+        protRow.atoms = protein.allAtoms.count
+        protRow.protAtoms = protein.proteinAtoms.count
         protRow.exposedAtoms = pair.prediction.protein.exposedAtoms.count
-        protRow.chains = lp.structure.chains.size()
-        protRow.chainNames = lp.structure.chains.collect {it.chainID}.join(" ")
+        // TODO count only model 1
+        // TODO count only protein chains
+        protRow.chains = protein.structure.chains.size()
+        protRow.chainNames = protein.structure.chains.collect {it.chainID}.join(" ")
         protRow.ligands = pair.ligandCount
         protRow.pockets = pair.prediction.pocketCount
-        protRow.ligNames = lp.ligands.collect { "$it.name($it.size)" }.join(" ")
-        protRow.ignoredLigands = lp.ignoredLigands.size()
-        protRow.ignoredLigNames = lp.ignoredLigands.collect { "$it.name($it.size)" }.join(" ")
-        protRow.smallLigands = lp.smallLigands.size()
-        protRow.smallLigNames = lp.smallLigands.collect { "$it.name($it.size)" }.join(" ")
-        protRow.distantLigands = lp.distantLigands.size()
-        protRow.distantLigNames = lp.distantLigands.collect { "$it.name($it.size|${format(it.contactDistance,1)}|${format(it.centerToProteinDist,1)})" }.join(" ")
+        protRow.ligNames = protein.ligands.collect { "$it.name($it.size)" }.join(" ")
+        protRow.ignoredLigands = protein.ignoredLigands.size()
+        protRow.ignoredLigNames = protein.ignoredLigands.collect { "$it.name($it.size)" }.join(" ")
+        protRow.smallLigands = protein.smallLigands.size()
+        protRow.smallLigNames = protein.smallLigands.collect { "$it.name($it.size)" }.join(" ")
+        protRow.distantLigands = protein.distantLigands.size()
+        protRow.distantLigNames = protein.distantLigands.collect { "$it.name($it.size|${format(it.contactDistance,1)}|${format(it.centerToProteinDist,1)})" }.join(" ")
         protRow.sasPoints = sasPoints.count
 
-        // ligand coverage
-        Atoms ligSasPoints = labeledPoints.cutoffAtoms(lp.allLigandAtoms, LIG_SAS_CUTOFF)
-        int n_ligSasPoints = ligSasPoints.count
-        int n_ligSasPointsCovered = ligSasPoints.toList().findAll { ((LabeledPoint)it).predicted }.toList().size()
-        log.debug "XXXX n_ligSasPoints: {} covered: {}", n_ligSasPoints, n_ligSasPointsCovered
+        // overlaps and coverages
+        int n_ligSasPoints = calcCoveragesProt(protRow, pair, sasPoints, pockets)
+        // ligand coverage by positively predicted points (note: not by pockets!)
+        Atoms ligLabeledPoints = labeledPoints.cutoffAtoms(protein.allLigandAtoms, LIG_SAS_CUTOFF)
+        int n_ligSasPointsCovered = ligLabeledPoints.toList().findAll { ((LabeledPoint) it).predicted }.toList().size()  // only for P2Rank
+        //log.debug "XXXX n_ligSasPoints: $n_ligSasPoints covered: $n_ligSasPointsCovered"
 
         // Conservation stats
-        ConservationScore score = lp.secondaryData.get(ConservationScore.conservationScoreKey)
+        ConservationScore score = protein.secondaryData.get(ConservationScore.conservationScoreKey)
         List<Double> bindingScrs = new ArrayList<>();
         List<Double> nonBindingScrs = new ArrayList<>();
         if (score != null) {
-            protRow.avgConservation = getAvgConservationForAtoms(lp.proteinAtoms, score)
-            Atoms bindingAtoms = lp.proteinAtoms.cutoffAtoms(lp.allLigandAtoms, lp.params.ligand_protein_contact_distance)
+            protRow.avgConservation = getAvgConservationForAtoms(protein.proteinAtoms, score)
+            Atoms bindingAtoms = protein.proteinAtoms.cutoffAtoms(protein.allLigandAtoms, protein.params.ligand_protein_contact_distance)
             protRow.avgBindingConservation = getAvgConservationForAtoms(bindingAtoms, score)
-            Atoms nonBindingAtoms = lp.proteinAtoms - bindingAtoms
+            Atoms nonBindingAtoms = protein.proteinAtoms - bindingAtoms
             protRow.avgNonBindingConservation = getAvgConservationForAtoms(nonBindingAtoms, score)
 
-            if (!lp.params.log_scores_to_file.isEmpty()) {
+            if (!protein.params.log_scores_to_file.isEmpty()) {
                 bindingScrs = bindingAtoms.distinctGroups.collect { it ->
                     score.getScoreForResidue(it
                             .getResidueNumber())
@@ -153,7 +177,7 @@ class Evaluation {
             }
         }
 
-        for (Ligand lig in pair.liganatedProtein.ligands) {
+        for (Ligand lig : protein.ligands) {
             LigRow row = new LigRow()
 
             row.protName = pair.name
@@ -161,8 +185,8 @@ class Evaluation {
             row.ligCode = lig.code
 
             row.ligCount = pair.ligandCount
-            row.ranks = criteria.collect { criterium -> pair.rankOfIdentifiedPocket(lig, criterium, pockets) }
-            row.dca4rank = pair.rankOfIdentifiedPocket(lig, standardCriterium, pockets)
+            row.ranks = criteria.collect { criterium -> pair.rankOfIdentifiedPocket(lig, pockets, criterium, context) }
+            row.dca4rank = pair.rankOfIdentifiedPocket(lig, pockets, standardCriterium, context)
             row.atoms = lig.atoms.count
             row.centerToProtDist = lig.centerToProteinDist
 
@@ -185,7 +209,7 @@ class Evaluation {
             prow.ligCount = pair.ligandCount
             prow.pocketCount = pair.prediction.pocketCount
 
-            Ligand ligand = pair.findLigandForPocket(pocket, standardCriterium)
+            Ligand ligand = pair.findLigandForPocket(pocket, standardCriterium, context)
             prow.ligName = (ligand==null) ? "" : ligand.name + "_" + ligand.code
 
             prow.score = pocket.stats.pocketScore
@@ -202,7 +226,7 @@ class Evaluation {
             tmpPockets.add(prow)
         }
         List<PocketRow> conservationSorted = tmpPockets.toSorted {it.avgConservation}.reverse(true)
-        List<PocketRow> combiSorted = tmpPockets.toSorted { (Math.pow(it.avgConservation, lp.params.conservation_exponent) * it.newScore)}.reverse(true)
+        List<PocketRow> combiSorted = tmpPockets.toSorted { (Math.pow(it.avgConservation, protein.params.conservation_exponent) * it.newScore)}.reverse(true)
         for (PocketRow prow : tmpPockets) {
             prow.conservationRank = conservationSorted.indexOf(prow) + 1
             prow.combinedRank = combiSorted.indexOf(prow) + 1
@@ -222,11 +246,49 @@ class Evaluation {
             ligSASPointsCount += n_ligSasPoints
             ligSASPointsCoveredCount += n_ligSasPointsCovered
 
-            if (!lp.params.log_scores_to_file.isEmpty()) {
+            if (!protein.params.log_scores_to_file.isEmpty()) {
                 bindingScores.addAll(bindingScrs);
                 nonBindingScores.addAll(nonBindingScrs);
             }
         }
+    }
+
+    def calcOverlapStatsForPockets(List<Pocket> topPockets, Atoms ligSasPoints) {
+        Atoms pocSasp = union((topPockets*.sasPoints).toList())
+        int intersect = intersection(ligSasPoints, pocSasp).count
+        int union     = union(ligSasPoints, pocSasp).count
+        double ligCov = div intersect, ligSasPoints.count
+        double surfOverlap = div intersect, union
+        [ligCov, surfOverlap]
+    }
+
+    private int calcCoveragesProt(ProteinRow protRow, PredictionPair pair, Atoms sasPoints, List<Pocket> pockets) {
+        Protein prot = pair.queryProtein
+        Atoms ligSasp = sasPoints.cutoffAtoms(prot.allLigandAtoms, LIG_SAS_CUTOFF)
+        int n_ligSasPoints = ligSasp.count
+
+        // ligand coverage by pockets
+        List<Pocket> topn0Pockets = head(pair.ligandCount, pockets)
+        List<Pocket> topn2Pockets = head(pair.ligandCount + 2, pockets)
+        def (ligCovN0, surfOverlapN0) = calcOverlapStatsForPockets(topn0Pockets, ligSasp)
+        def (ligCovN2, surfOverlapN2) = calcOverlapStatsForPockets(topn2Pockets, ligSasp)
+        protRow.ligandCoverageN0 = ligCovN0
+        protRow.ligandCoverageN2 = ligCovN2
+        protRow.surfOverlapN0 = surfOverlapN0
+        protRow.surfOverlapN2 = surfOverlapN2
+
+        // TODO revisit: consider prot averaging vs ligand averaging etc...
+        List<Ligand> succLigands = prot.ligands.findAll { it.predictedPocket!=null }.toList() //.toList()
+        List<Pocket> succPockets = succLigands.collect { it.predictedPocket }.toList()
+        Atoms succLigSasp = union( (succLigands*.sasPoints).toList() )
+        Atoms succPocSasp = union( (succPockets*.sasPoints).toList() )
+        int succUnion = union(succLigSasp, succPocSasp).count
+        int succIntersect = intersection(succLigSasp, succPocSasp).count
+
+        protRow.ligandCoverageSucc = div succIntersect, succLigSasp.count
+        protRow.surfOverlapSucc    = div succIntersect, succUnion
+
+        n_ligSasPoints
     }
 
     void addAll(Evaluation eval) {
@@ -263,6 +325,25 @@ class Evaluation {
 
         return res
     }
+
+    double calcSuccRateProteinCentric(int assesorNum, int tolerance) {
+        double identified = 0
+
+        for (LigRow ligRow in ligandRows) {
+            int rankForAssessor = ligRow.ranks[assesorNum]
+            if ((rankForAssessor > 0) && (rankForAssessor <= ligRow.ligCount + tolerance)) {
+                identified += 1.0 / ligRow.ligCount
+            }
+        }
+
+        double res = 0
+        if (ligandCount != 0) {
+            res = ((double) identified) / proteinCount
+        }
+
+        return res
+    }
+
 
     double calcDefaultCriteriumSuccessRate(int tolerance) {
         return calcSuccRate(3, tolerance)
@@ -316,6 +397,17 @@ class Evaluation {
         if (list.size()==0) return Double.NaN
         list.collect { closure(it) }.findAll { it!=Double.NaN }.sum(0) / list.size()
     }
+
+    /**
+     * average only on proteins that have relevant ligands
+     */
+    public double avgLigProt(List<ProteinRow> list, Closure<ProteinRow> closure) {
+        List<ProteinRow> ligProts = list.findAll { it.ligands > 0 }.toList()
+        return avg(ligProts, closure)
+    }
+
+
+
 
     double div(double a, double b) {
         if (b==0d)
@@ -403,6 +495,13 @@ class Evaluation {
         m.AVG_LIG_CLOSTES_POCKET_DIST = avgClosestPocketDist
         m.LIGAND_COVERAGE = ligandCoverage
 
+        m.AVG_DSO_TOPN0    = avgLigProt proteinRows, { it.surfOverlapN0      }  // avg by proteins (unlike DCA and others)
+        m.AVG_DSO_TOPN2    = avgLigProt proteinRows, { it.surfOverlapN2      }  // avg by proteins (unlike DCA and others)
+        m.AVG_DSO_SUCC     = avgLigProt proteinRows, { it.surfOverlapSucc    }  // avg by proteins (unlike DCA and others)
+        m.AVG_LIGCOV_TOPN0 = avgLigProt proteinRows, { it.ligandCoverageN0   }  // avg by proteins (unlike DCA and others)
+        m.AVG_LIGCOV_TOPN2 = avgLigProt proteinRows, { it.ligandCoverageN2   }  // avg by proteins (unlike DCA and others)
+        m.AVG_LIGCOV_SUCC  = avgLigProt proteinRows, { it.ligandCoverageSucc }  // avg by proteins (unlike DCA and others)
+
         m.AVG_POCKETS = avgPockets
         m.AVG_POCKET_SURF_ATOMS = avgPocketSurfAtoms
         m.AVG_POCKET_SURF_ATOMS_TRUE_POCKETS = avgPocketSurfAtomsTruePockets
@@ -428,19 +527,36 @@ class Evaluation {
         m.DCA_4_4 = calcDefaultCriteriumSuccessRate(4)
         m.DCA_4_99 = calcDefaultCriteriumSuccessRate(99)
 
+        m.DCA_4_0_PC = calcSuccRateProteinCentric(3,0)
+        m.DCA_4_2_PC = calcSuccRateProteinCentric(3,2)
+
         // compare to getDefaultEvalCrtieria()
         m.DCC_4_0 = calcSuccRate(18,0)
         m.DCC_4_2 = calcSuccRate(18,2)
-        m.DPA_1_0 = calcSuccRate(25,0)
-        m.DPA_1_2 = calcSuccRate(25,2)
-        m.DSA_3_0 = calcSuccRate(33,0)
-        m.DSA_3_2 = calcSuccRate(33,2)
+        m.DCC_5_0 = calcSuccRate(19,0)
+        m.DCC_5_2 = calcSuccRate(19,2)
+
+        m.DSOR_03_0 = calcSuccRate(29,0)
+        m.DSOR_03_2 = calcSuccRate(29,2)
+        m.DSOR_02_0 = calcSuccRate(29,0)
+        m.DSOR_02_2 = calcSuccRate(29,2)
+        m.DSWO_05_0 = calcSuccRate(37,0)
+        m.DSWO_05_2 = calcSuccRate(37,2)
+
+//        m.DPA_1_0 = calcSuccRate(25,0)
+//        m.DPA_1_2 = calcSuccRate(25,2)
+//        m.DSA_3_0 = calcSuccRate(33,0)
+//        m.DSA_3_2 = calcSuccRate(33,2)
+        
+        m.OPT1 = 100*m.DCA_4_0 + 100*m.DCA_4_2 + 50*m.DCA_4_4 + 10*m.AVG_LIGCOV_SUCC + 5*m.AVG_DSO_SUCC
+        m.OPT2 = 100*(1-m.DCA_4_0_PC) + 50*(1-m.DCA_4_2_PC) + 5*m.AVG_LIGCOV_SUCC + 3*m.AVG_DSO_SUCC
 
         m.DCA_4_0_NOMINAL = m.DCA_4_0 * m.LIGANDS
 
-        if (!Params.inst.log_scores_to_file.isEmpty()) {
+        // TODO: move this somewhere else (getStats() shouldn't write to disk)
+        if (!params.log_scores_to_file.empty) {
             PrintWriter w = new PrintWriter(new BufferedWriter(
-                    new FileWriter(Params.inst.log_scores_to_file, true)));
+                    new FileWriter(params.log_scores_to_file, true)));
             w.println("First line of the file");
             nonBindingScores.forEach({ it -> w.print(it); w.print(' ') });
             w.println()
@@ -450,6 +566,19 @@ class Evaluation {
         }
 
         return m
+    }
+
+    /**
+     * get list of evaluation criteria used during eval routines
+     */
+    static List<IdentificationCriterium> getDefaultEvalCrtieria() {
+        double REQUIRED_POCKET_COVERAGE = 0.2  //  like in fpocket MOc criterion
+        ((1..15).collect { new DCA(it) }) +         // 0-14
+        ((1..10).collect { new DCC(it) }) +         // 15-24
+//        ((1..6).collect { new DPA(it) }) +
+//        ((1..6).collect { new DSA(it) }) +
+        ([0.7,0.6,0.5,0.4,0.3,0.2,0.1].collect { new DSO(it) }) + // 25-31
+        ([1,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1].collect { new DSWO((double)it, REQUIRED_POCKET_COVERAGE) }) // 32-41
     }
 
 //===========================================================================================================//
@@ -557,6 +686,15 @@ class Evaluation {
         double avgConservation
         double avgBindingConservation
         double avgNonBindingConservation
+
+        double ligandCoverageN0    // conered by top-n pockets
+        double ligandCoverageN2    // covered by top-(n+2) pockets
+        double surfOverlapN0       // discretized surface overlap considering top-n pockets
+        double surfOverlapN2       // discretized surface overlap considering top-(n+2) pockets
+        double ligandCoverageSucc  // coverage only considering those ligands that were successfully predicted according to DCA(4)
+        double surfOverlapSucc     // overlap only considering those ligands that were successfully predicted according to DCA(4)
+
+//        double protDCA_4_0
 
         int sasPoints
     }

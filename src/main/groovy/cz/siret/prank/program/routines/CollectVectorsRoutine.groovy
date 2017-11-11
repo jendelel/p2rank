@@ -1,13 +1,11 @@
 package cz.siret.prank.program.routines
 
-import cz.siret.prank.collectors.DataPreProcessor
+import cz.siret.prank.collectors.DataPreprocessor
 import cz.siret.prank.collectors.PointVectorCollector
 import cz.siret.prank.collectors.VectorCollector
 import cz.siret.prank.domain.Dataset
-import cz.siret.prank.domain.PredictionPair
 import cz.siret.prank.features.FeatureExtractor
 import cz.siret.prank.features.FeatureVector
-import cz.siret.prank.features.api.ProcessedItemContext
 import cz.siret.prank.score.criteria.DCA
 import cz.siret.prank.score.criteria.IdentificationCriterium
 import cz.siret.prank.utils.Futils
@@ -72,11 +70,8 @@ class CollectVectorsRoutine extends Routine {
 
         dataset.processItems(params.parallel, new Dataset.Processor() {
             void processItem(Dataset.Item item) {
-                PredictionPair pair = item.predictionPair
-
-                
                 final VectorCollector collector = new PointVectorCollector(extractor, identifiedPocketAssessor)
-                final VectorCollector.Result res = collector.collectVectors(pair, item.getContext())
+                final VectorCollector.Result res = collector.collectVectors(item.predictionPair, item.context)
 
                 Instances inst = WekaUtils.createDatasetWithBinaryClass(extractor.vectorHeader)
                 for (FeatureVector v : res.vectors) {
@@ -86,7 +81,6 @@ class CollectVectorsRoutine extends Routine {
                 pos.addAndGet(res.positives)
                 neg.addAndGet(res.negatives)
                 instList.add(inst)
-
             }
         });
 
@@ -94,8 +88,7 @@ class CollectVectorsRoutine extends Routine {
         int negatives = neg.get()
         int count = positives + negatives
         double ratio = PerfUtils.round ( (double)positives / negatives , 3)
-        int ligandCount = dataset.items.collect { it.predictionPair.liganatedProtein.ligands.size() }.sum(0) as int
-
+        int ligandCount = dataset.items.collect { it.predictionPair.queryProtein.ligands.size() }.sum(0) as int
 
         write "processed $ligandCount ligans in $dataset.size files"
         write "extracted $count vectors...  positives:$positives negatives:$negatives ratio:$ratio"
@@ -106,7 +99,6 @@ class CollectVectorsRoutine extends Routine {
         negatives = WekaUtils.countNegatives(data)
         count = positives + negatives
 
-
         logTime "collecting vectors finished in $timer.formatted"
 
         return new Result(instances: data, count: count, positives: positives, negatives: negatives)
@@ -114,14 +106,12 @@ class CollectVectorsRoutine extends Routine {
 
 
     Instances prepareDataForWeka(List<Instances> instList, String arffFile) {
-
         Instances data = WekaUtils.joinInstances(instList)
 
         log.info "instances: " + data.size()
-        //data = WekaUtils.numericToNominal("last", data)
 
         // TODO move up to TrainEvalRoutine
-        data = new DataPreProcessor().preProcessTrainData(data)
+        data = new DataPreprocessor().preProcessTrainData(data)
 
         if (!params.delete_vectors) {
             WekaUtils.saveDataArff(arffFile, false, data)

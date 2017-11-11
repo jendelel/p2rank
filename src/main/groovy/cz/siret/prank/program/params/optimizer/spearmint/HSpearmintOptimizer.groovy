@@ -6,7 +6,9 @@ import cz.siret.prank.program.params.optimizer.HObjectiveFunction
 import cz.siret.prank.program.params.optimizer.HOptimizer
 import cz.siret.prank.program.params.optimizer.HStep
 import cz.siret.prank.program.params.optimizer.HVariable
+import cz.siret.prank.utils.ATimer
 import cz.siret.prank.utils.Formatter
+import cz.siret.prank.utils.Futils
 import cz.siret.prank.utils.ProcessRunner
 import cz.siret.prank.utils.Writable
 import groovy.transform.CompileStatic
@@ -14,7 +16,11 @@ import groovy.util.logging.Slf4j
 
 import java.nio.file.Path
 
+import static cz.siret.prank.utils.ATimer.startTimer
 import static cz.siret.prank.utils.Futils.*
+import static cz.siret.prank.utils.Futils.delete
+
+import static cz.siret.prank.utils.ProcessRunner.process
 
 /**
  * optimizer based on https://github.com/HIPS/Spearmint
@@ -24,6 +30,8 @@ import static cz.siret.prank.utils.Futils.*
 class HSpearmintOptimizer extends HOptimizer implements Writable {
 
     enum Likelihood { NOISELESS, GAUSSIAN }
+
+    static int SLEEP_INTERVAL = 100
 
     String spearmintCommand = "python main.py"
     String mongodbCommand = "mongod"
@@ -57,16 +65,28 @@ class HSpearmintOptimizer extends HOptimizer implements Writable {
         writeFile "$dir/config.json", genConfig()
         writeFile "$dir/eval.py", genEval()
 
-        String mongoLogFile = absSafePath("$dir/mongo/mongo.log" )
-        String mongoDataDir = absSafePath( "$dir/mongo/data" )
+        String sysTmpDir = Futils.getSystemTempDir()
+        String mongoDir = absSafePath("$sysTmpDir/prank/hopt/mongo")
+        String mongoLogFile = absSafePath("$mongoDir/mongo.log" )
+        String mongoOutFile = absSafePath("$mongoDir/mongo.out" )
+        String mongoDataDir = absSafePath( "$mongoDir/data" )
+
+        delete(mongoDir)
         mkdirs(mongoDataDir)
 
+        try {
+            write "Killing mongodb"
+            process("sudo pkill mongo").inheritIO().executeAndWait()
+        } catch (e) {
+            log.error(e.message, e)
+        }
+
         // run mongo
-        log.info("Starting mongodb")
+        write "Starting mongodb"
         String mcmd = "$mongodbCommand --fork --smallfiles --logpath $mongoLogFile --dbpath $mongoDataDir"
-        write "executing '$mcmd'"
-        ProcessRunner mongoProc = new ProcessRunner(mcmd, dir).redirectErrorStream().redirectOutput(new File("$dir/mongo/mongo.out"))
-        int exitCode = mongoProc.execute().waitFor()
+        write "  executing '$mcmd'"
+        ProcessRunner mongoProc = process(mcmd, mongoDir).redirectErrorStream().redirectOutput(new File(mongoOutFile))
+        int exitCode = mongoProc.executeAndWait()
         if (exitCode != 0) {
             log.error("Mongodb log: \n " + readFile(mongoLogFile))
             throw new PrankException("Failed to execute mongodb (required by spearmint)")
@@ -74,13 +94,12 @@ class HSpearmintOptimizer extends HOptimizer implements Writable {
 
 
         // run spearmint
-        log.info("Starting spearmint")
+        write "Starting spearmint"
        // String scmd = spearmintCommand + " " + dir
         String scmd = spearmintCommand + " " + dir
 //        ProcessRunner spearmintProc = new ProcessRunner(scmd, spearmintDir.toString()).redirectErrorStream().redirectOutput(new File("$dir/spearmint.out"))
-        write "executing '$scmd'"
-        ProcessRunner spearmintProc = new ProcessRunner(scmd, spearmintDir.toString()).redirectErrorStream()
-        spearmintProc.processBuilder.inheritIO()
+        write "  executing '$scmd'"
+        ProcessRunner spearmintProc = process(scmd, spearmintDir.toString()).inheritIO()
         spearmintProc.execute()
 
         int stepNumber = 0
@@ -91,7 +110,7 @@ class HSpearmintOptimizer extends HOptimizer implements Writable {
         log.debug "waiting for first vars file in '$varsDir'"
         while (isDirEmpty(varsDir)) {
             log.debug "waiting..."
-            sleep(1000)
+            sleep(SLEEP_INTERVAL)
         }
         jobId = listFiles(varsDir).first().name.toInteger()
 
@@ -99,13 +118,17 @@ class HSpearmintOptimizer extends HOptimizer implements Writable {
         String stepsf = "$dir/steps.csv"
         writeFile stepsf, "[num], [job_id], " + varNames.join(", ") + ", [value] \n"
 
+        double sumTime = 0
+
         while (stepNumber < maxIterations) {
+            def timer = startTimer()
             log.info "job id: {}", jobId
             String varf = "$varsDir/$jobId"
             waitForFile(varf)
 
+            
             // parse variable assignment
-            Map<String, Object> vars = new Gson().fromJson(new File(varf).text, Map.class);
+            Map<String, Object> vars = new Gson().fromJson(readFile(varf), Map.class);
             log.info "vars: {}", vars
 
             // eval objective function
@@ -116,8 +139,15 @@ class HSpearmintOptimizer extends HOptimizer implements Writable {
             HStep step = new HStep(stepNumber, vars, val)
             steps.add(step)
             append stepsf, "$stepNumber, $jobId, " + varNames.collect { fmt vars.get(it) }.join(", ") + ", ${fmt val} \n"
-            writeFile "$dir/best.csv", printBestStep(bestStep, varNames)
+            String bests = printBestStep(bestStep, varNames)
+            writeFile "$dir/best.csv", bests
+            write "BEST STEP:\n" + bests
             write "For results see " + stepsf
+
+            long time = timer.timeSec
+            sumTime += time
+            long avgTime = (long)(sumTime / (stepNumber+1))
+            write "Step $stepNumber finished in ${time}s (avg: ${avgTime}s)"
 
             stepNumber++
             jobId++
@@ -142,18 +172,11 @@ class HSpearmintOptimizer extends HOptimizer implements Writable {
         sprintf "%8.4f", x
     }
 
-    HStep getBestStep() {
-        assert !steps.isEmpty()
-
-        steps.min { it.functionValue }
-    }
-
-
     void waitForFile(String fname) {
         log.info "waiting for file '$fname'"
         while (!exists(fname)) {
             log.debug "waiting..."
-            sleep(1000)
+            sleep(SLEEP_INTERVAL)
         } 
     }
 

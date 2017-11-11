@@ -16,6 +16,8 @@ import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import org.biojava.nbio.structure.Atom
 
+import static java.lang.Math.max
+
 /**
  * Handles the process of calculating prank feature vectors.
  * At first it calculates features for solvent exposed atoms of the protein.
@@ -48,13 +50,19 @@ class PrankFeatureExtractor extends FeatureExtractor<PrankFeatureVector> impleme
     private boolean DO_SMOOTH_REPRESENTATION = params.smooth_representation
     private double SMOOTHING_CUTOFF_DIST = params.smoothing_radius
     private final boolean AVERAGE_FEAT_VECTORS = params.average_feat_vectors
+    private final boolean AVG_WEIGHTED = params.avg_weighted
 
     private final WeightFun weightFun = WeightFun.create(params.weight_function)
 
     // pocket related
     Pocket pocket
     Atoms surfaceLayerAtoms
-    Atoms deepSurrounding    // for protrusion
+
+    /**
+     * deep layer of atums unter the protein surface
+     * serves as cache for speeding up calculation of protrusion and other features
+     */
+    Atoms deepLayer
     Atoms sampledPoints
 
     FeatureSetup featureSetup
@@ -92,7 +100,8 @@ class PrankFeatureExtractor extends FeatureExtractor<PrankFeatureVector> impleme
         res.trainingExtractor = this.trainingExtractor
 
         protein.calcuateSurfaceAndExposedAtoms()
-        res.deepSurrounding = protein.proteinAtoms.cutoffAtoms(protein.exposedAtoms, params.protrusion_radius).buildKdTree()
+        double thickness = max(params.protrusion_radius, params.pair_hist_radius)
+        res.deepLayer = protein.proteinAtoms.cutoffAtoms(protein.exposedAtoms, thickness).buildKdTree()
 
         // init features
         for (FeatureSetup.Feature feature : featureSetup.enabledFeatures) {
@@ -108,7 +117,7 @@ class PrankFeatureExtractor extends FeatureExtractor<PrankFeatureVector> impleme
         pocketPointSampler = PointSampler.create(protein, trainingExtractor)
 
         if (params.deep_surrounding) {
-            surfaceLayerAtoms = deepSurrounding
+            surfaceLayerAtoms = deepLayer
         } else {
             // surfaceLayerAtoms = protein.proteinAtoms.cutoffAroundAtom(pocket.surfaceAtoms, 1)  // shallow
             //surfaceLayerAtoms = protein.exposedAtoms.cutoffAtoms(pocket.surfaceAtoms, 6) //XXX
@@ -142,7 +151,7 @@ class PrankFeatureExtractor extends FeatureExtractor<PrankFeatureVector> impleme
         this.trainingExtractor     = proteinPrototype.trainingExtractor
         this.featureSetup     = proteinPrototype.featureSetup
 
-        this.deepSurrounding = proteinPrototype.deepSurrounding
+        this.deepLayer = proteinPrototype.deepLayer
         this.surfaceLayerAtoms = proteinPrototype.surfaceLayerAtoms
         this.properties = proteinPrototype.properties
         this.smoothRepresentations = proteinPrototype.smoothRepresentations
@@ -197,7 +206,7 @@ class PrankFeatureExtractor extends FeatureExtractor<PrankFeatureVector> impleme
 
 
 
-        log.info "P2R protein:$protein.proteinAtoms.count  exposedAtoms:$res.surfaceLayerAtoms.count  deepSurrounding:$res.deepSurrounding.count sasPoints:$res.sampledPoints.count"
+        log.info "P2R protein:$protein.proteinAtoms.count  exposedAtoms:$res.surfaceLayerAtoms.count  deepLayer:$res.deepLayer.count sasPoints:$res.sampledPoints.count"
 
         return res
     }
@@ -265,6 +274,8 @@ class PrankFeatureExtractor extends FeatureExtractor<PrankFeatureVector> impleme
         //    log.warn "calc from only 1 atom: $a.name $a"
         //}
 
+        double weightSum = 0
+
         for (Atom a : neighbourhoodAtoms) {
             PrankFeatureVector props = (PrankFeatureVector) fromVectors.get(a.PDBserial)
 
@@ -272,31 +283,36 @@ class PrankFeatureExtractor extends FeatureExtractor<PrankFeatureVector> impleme
 
             double dist = Struct.dist(point, a)
             double weight = calcWeight(dist)
+            weightSum += weight
 
             res.add( props.copy().multiply(weight) )
         }
 
         if (AVERAGE_FEAT_VECTORS) {
-            double multip = Math.pow(n, AVG_POW)
+            double base = n
+            if (AVG_WEIGHTED) {
+                base = weightSum
+            }
 
-            res.multiply(1d/multip)
+            double multip = Math.pow(base, AVG_POW)  // for AVG_POW from <0,1> goes from 'no average, just sum' -> 'full average'
+
+            res.multiply(1d/multip)               // avg
 
             // special cases (TODO: move to ChemFeature)
             if (featureSetup.enabledFeatureNames.contains(ChemFeature.NAME)) {
-                res.valueVector.multiply('atomDensity', multip)
-                res.valueVector.multiply('hDonorAtoms', multip)
-                res.valueVector.multiply('hAcceptorAtoms', multip)
+                res.valueVector.multiply('chem.atomDensity', multip)
+                res.valueVector.multiply('chem.hDonorAtoms', multip)
+                res.valueVector.multiply('chem.hAcceptorAtoms', multip)
             }
 
         }
         // special cases (TODO: move to ChemFeature)
         if (featureSetup.enabledFeatureNames.contains(ChemFeature.NAME)) {
-            res.valueVector.set('atoms', n)
+            res.valueVector.set('chem.atoms', n)
         }
 
 
         // calculate extra SAS features
-
         SasFeatureCalculationContext context = new SasFeatureCalculationContext(protein, neighbourhoodAtoms, this)
         for (FeatureSetup.Feature feature : featureSetup.enabledSasFeatures) {
             double[] values = feature.calculator.calculateForSasPoint(point, context)

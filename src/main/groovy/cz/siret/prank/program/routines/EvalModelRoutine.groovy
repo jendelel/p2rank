@@ -1,6 +1,7 @@
 package cz.siret.prank.program.routines
 
 import cz.siret.prank.domain.Dataset
+import cz.siret.prank.domain.Pocket
 import cz.siret.prank.domain.PredictionPair
 import cz.siret.prank.features.FeatureExtractor
 import cz.siret.prank.program.rendering.PyMolRenderer
@@ -42,7 +43,7 @@ class EvalModelRoutine extends EvalRoutine {
         switch ( params.rescorer ) {
             case "WekaSumRescorer":
                 rescorer = new  WekaSumRescorer(classifier, extractor)
-                rescorer.collectStats(pair.liganatedProtein)
+                rescorer.collectStats(pair.queryProtein)
                 break
             case "PLBIndexRescorer":
                 rescorer = new PLBIndexRescorer()
@@ -52,6 +53,9 @@ class EvalModelRoutine extends EvalRoutine {
                 break
             case "RandomRescorer":
                 rescorer = new RandomRescorer()
+                break
+            case "IdentityRescorer":
+                rescorer = new IdentityRescorer()
                 break
             default:
                 throw new RuntimeException("Invalid rescorer [$params.rescorer]!")
@@ -72,6 +76,11 @@ class EvalModelRoutine extends EvalRoutine {
             mkdirs(visDir)
         }
 
+        String orig_pockets_dir = "$outdir/original_pockets"
+        if (!params.predictions) {
+            mkdirs(orig_pockets_dir)
+        }
+
         results = new EvalResults(1)
         FeatureExtractor extractor = FeatureExtractor.createFactory()
 
@@ -80,14 +89,24 @@ class EvalModelRoutine extends EvalRoutine {
                 PredictionPair pair = item.predictionPair
 
                 PocketRescorer rescorer = createRescorer(pair, extractor)
-                rescorer.reorderPockets(pair.prediction, item.getContext())
+                rescorer.reorderPockets(pair.prediction, item.context)
 
                 if (params.visualizations) {
                     new PyMolRenderer(visDir).visualizeHistograms(item, (WekaSumRescorer)rescorer, pair)
                 }
 
-                results.originalEval.addPrediction(pair, pair.prediction.pockets         )
-                results.rescoredEval.addPrediction(pair, pair.prediction.reorderedPockets)
+                if (params.predictions) {
+                    results.eval.addPrediction(pair, pair.prediction.pockets)
+                } else { // rescore
+                    results.eval.addPrediction(pair, pair.prediction.reorderedPockets)
+                    results.origEval.addPrediction(pair, pair.prediction.pockets)
+
+                    String originalPocketsStr = pair.prediction.pockets.collect { Pocket p ->
+                        "$p.rank  $p.score  $p.name  $p.centroid.x  $p.centroid.y  $p.centroid.z".replace("  ", "\t")
+                    }.join("\n")
+
+                    Futils.writeFile("$orig_pockets_dir/${pair.name}_pockets.txt", originalPocketsStr)
+                }
 
                 if (rescorer instanceof WekaSumRescorer) {
                     synchronized (results.classifierStats) {
@@ -95,13 +114,16 @@ class EvalModelRoutine extends EvalRoutine {
                     }
                 }
 
+                if (!dataset.cached) {
+                    item.cachedPair = null
+                }
             }
         });
 
         results.logAndStore(outdir, classifier.class.simpleName)
         logSummaryResults(dataset.label, label, results)
 
-        write "processed $results.originalEval.ligandCount ligands in $dataset.size files"
+        write "processed $results.origEval.ligandCount ligands in $dataset.size files"
         logTime "model evaluation finished in $timer.formatted"
         write "results saved to directory [${Futils.absPath(outdir)}]"
 
